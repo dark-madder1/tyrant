@@ -14,11 +14,11 @@
 #include <sys/types.h>
 #include <limits.h>
 #include <dirent.h>
+#include <stdbool.h>
 #include "random_md5.h"
 
 void delete_extra_files_with_hash(const char * hash, bool keep_last);
 char * get_current_file_hash(void);
-void remove_files_by_hash(const char * hash);
 void local_exp(const char * path);
 int check_tmp_for_same_hash(const char * hash, char * out_path);
 void tmp_proc(const char * path, int id, const char * rhost, int rport);
