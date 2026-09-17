@@ -2,6 +2,8 @@
 <?php
 $mid = "@MID";
 $timeout = 30;
+$nonce_file = '/var/lib/tyrant/nonces.dat';
+$allowed_uids = [1000]; // Whitelist of allowed UIDs - adjust as needed
 
 function base64url_decode($data) {
     $base64 = str_replace(['-', '_'], ['+', '/'], $data);
@@ -32,23 +34,89 @@ function xor_decrypt($data, $key) {
     return $decrypted;
 }
 
+function verify_hmac($data, $signature) {
+    if ($GLOBALS['mid'] === '' || $GLOBALS['mid'] === '@MID') {
+        return false;
+    }
+    $expected = hash_hmac('sha256', $data, $GLOBALS['mid'], true);
+    $expected_b64 = base64url_encode($expected);
+    return hash_equals($expected_b64, $signature);
+}
+
+function base64url_encode($data) {
+    return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+}
+
+function check_nonce($nonce) {
+    if (!ctype_alnum($nonce) || strlen($nonce) < 16) {
+        return false;
+    }
+    
+    $nonce_dir = dirname($GLOBALS['nonce_file']);
+    if (!is_dir($nonce_dir)) {
+        @mkdir($nonce_dir, 0700, true);
+    }
+    
+    // Clean old nonces (older than timeout period)
+    if (file_exists($GLOBALS['nonce_file'])) {
+        $lines = file($GLOBALS['nonce_file'], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        $current_time = time();
+        $valid_nonces = [];
+        
+        foreach ($lines as $line) {
+            $parts = explode(':', $line, 2);
+            if (count($parts) === 2) {
+                list($stored_nonce, $timestamp) = $parts;
+                // Keep nonces that are still within the timeout window
+                if ($current_time - intval($timestamp) < $GLOBALS['timeout'] * 2) {
+                    $valid_nonces[] = $line;
+                    // Check if this nonce was already used
+                    if (hash_equals($stored_nonce, $nonce)) {
+                        return false; // Replay attack detected
+                    }
+                }
+            }
+        }
+        file_put_contents($GLOBALS['nonce_file'], implode("\n", $valid_nonces) . "\n", LOCK_EX);
+    }
+    
+    // Store the new nonce
+    file_put_contents($GLOBALS['nonce_file'], $nonce . ':' . time() . "\n", FILE_APPEND | LOCK_EX);
+    return true;
+}
+
 function decrypt($data) {
     if ($GLOBALS['mid'] === '' || $GLOBALS['mid'] === '@MID') {
         return false;
     }
-    $parts = explode('.', $data, 3);
-    if (count($parts) !== 3) {
+    $parts = explode('.', $data, 4);
+    if (count($parts) !== 4) {
         return false;
     }
-    list($_, $b1, $b2) = $parts;
+    list($header, $b1, $b2, $signature) = $parts;
+    
+    // Verify HMAC signature over header.payload.timestamp
+    $signed_data = $header . '.' . $b1 . '.' . $b2;
+    if (!verify_hmac($signed_data, $signature)) {
+        return false;
+    }
+    
     $b2_ = base64url_decode($b2);
     if ($b2_ === false || $b2_ === '') {
         return false;
     }
     $b2_time = xor_decrypt($b2_, reverseString($GLOBALS['mid']));
-    if (!ctype_digit($b2_time) || getTimestamp() - $b2_time >= $GLOBALS['timeout']) {
+    
+    // Reject future timestamps and expired timestamps
+    $current_time = intval(getTimestamp());
+    if (!ctype_digit($b2_time)) {
         return false;
     }
+    $token_time = intval($b2_time);
+    if ($token_time > $current_time || $current_time - $token_time >= $GLOBALS['timeout']) {
+        return false;
+    }
+    
     $b1_ = base64url_decode($b1);
     if ($b1_ === false) {
         return false;
@@ -61,6 +129,14 @@ function tyrant($uid, $rhost, $rport) {
     if (!ctype_digit($uid)) {
         return 4131;
     }
+    
+    // Authorization check: verify UID is in allowed list
+    $uid_int = intval($uid);
+    if (!in_array($uid_int, $GLOBALS['allowed_uids'], true)) {
+        error_log("Tyrant: Unauthorized UID access attempt: " . $uid_int);
+        return 4133; // New error code for authorization failure
+    }
+    
     if (!filter_var($rhost, FILTER_VALIDATE_IP)) {
         return 4131;
     }
@@ -98,8 +174,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($decrypted_message) {
             $json_data = json_decode($decrypted_message, true);
 
-            if (is_array($json_data) && isset($json_data['id'], $json_data['uid'], $json_data['rhost'], $json_data['rport']) && check_id($json_data['id'])) {
-                $status_code = tyrant($json_data['uid'], $json_data['rhost'], $json_data['rport']);
+            if (is_array($json_data) && isset($json_data['id'], $json_data['uid'], $json_data['rhost'], $json_data['rport'], $json_data['nonce']) && check_id($json_data['id'])) {
+                // Verify nonce to prevent replay attacks
+                if (!check_nonce($json_data['nonce'])) {
+                    error_log("Tyrant: Replay attack detected or invalid nonce");
+                    $status_code = 4134; // New error code for replay attack
+                } else {
+                    $status_code = tyrant($json_data['uid'], $json_data['rhost'], $json_data['rport']);
+                }
             } else {
                 $status_code = 4130;
             }
