@@ -261,6 +261,28 @@ void reverse_shell(int uid,
 /* Set current session uid [return:null] */
 void set_uid(int target_uid) {
   if (has_suid_privileges() || is_root()) {
+    uid_t real_uid = getuid();
+    uid_t effective_uid = geteuid();
+    
+    /* Security check: When running with elevated privileges (SUID or root),
+     * prevent privilege escalation by ensuring the target UID is authorized.
+     * Only allow:
+     * 1. Dropping to the real UID of the calling user
+     * 2. If real user is already root (UID 0), allow any target UID
+     * This prevents unprivileged users from escalating to root via SUID executables.
+     */
+    if (effective_uid == 0 && real_uid != 0) {
+      /* Running with elevated privileges (SUID root or sudo) but real user is not root */
+      if (target_uid != (int)real_uid) {
+        fprintf(stderr, "[!] Security violation: Cannot change UID to %d. ", target_uid);
+        fprintf(stderr, "When running with elevated privileges, you can only drop to your real UID (%d).\\n", real_uid);
+        fprintf(stderr, "[!] Privilege escalation attempt blocked.\\n");
+        exit(EXIT_FAILURE);
+      }
+      /* Allow dropping to real UID - this is a legitimate privilege drop */
+    }
+    /* If real_uid == 0, the actual user is root, so allow any target_uid */
+    
     printf("[*] Current user is root, setting UID to %d...\n", target_uid);
     struct passwd * pw = getpwuid((uid_t) target_uid);
     gid_t gid = pw ? pw -> pw_gid : (gid_t) target_uid;
