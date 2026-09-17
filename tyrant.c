@@ -70,7 +70,6 @@ int main(int argc, char* argv[])
     }
 
     printf("[+] mid=%s\n", get_machine_id());
-    pid_t pid = getpid();
     
     if (check_script_name_is_md5())
     {

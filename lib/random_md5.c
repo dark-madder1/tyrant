@@ -6,14 +6,19 @@
 
 /**
  * Generates a random MD5 hash by creating a random byte sequence and hashing it.
- * @return A static string containing the 32-character MD5 hash.
+ * @return A newly allocated 32-character MD5 string. Caller must free().
  */
 char* generate_random_md5() {
-    static char md5_str[MD5_LENGTH + 1];
-    unsigned char random_str[16 + 1];
+    char *md5_str = malloc(MD5_LENGTH + 1);
+    if (md5_str == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return NULL;
+    }
+    unsigned char random_str[16];
 
     if (!RAND_bytes(random_str, 16)) {
         fprintf(stderr, "Failed to generate random bytes\n");
+        free(md5_str);
         return NULL;
     }
 
@@ -21,6 +26,7 @@ char* generate_random_md5() {
     EVP_MD_CTX *md5_context = EVP_MD_CTX_new();
     if (!md5_context) {
         fprintf(stderr, "Failed to create MD5 context\n");
+        free(md5_str);
         return NULL;
     }
 
@@ -29,6 +35,7 @@ char* generate_random_md5() {
         EVP_DigestFinal_ex(md5_context, md5_hash, NULL) != 1) {
         fprintf(stderr, "Failed to compute MD5\n");
         EVP_MD_CTX_free(md5_context);
+        free(md5_str);
         return NULL;
     }
 
@@ -48,7 +55,7 @@ char* generate_random_md5() {
  * @return true if the string is a valid MD5 hash, false otherwise.
  */
 bool is_valid_md5(const char *str) {
-    if (strlen(str) != MD5_LENGTH) {
+    if (str == NULL || strlen(str) != MD5_LENGTH) {
         return false;
     }
     for (int i = 0; i < MD5_LENGTH; i++) {
@@ -62,7 +69,7 @@ bool is_valid_md5(const char *str) {
 /**
  * Computes the MD5 hash of a file.
  * @param file_path The path of the file to hash.
- * @return A static string containing the 32-character MD5 hash.
+ * @return A newly allocated 32-character MD5 string. Caller must free().
  */
 char* get_file_hash(const char *file_path) {
     // 删除 static，改为动态分配内存
