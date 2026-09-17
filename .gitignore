@@ -1,0 +1,10 @@
+setup_tyrant.sh.quarantined
+*.quarantined
+tyrant.gpr
+tyrant.lock
+tyrant.lock~
+tyrant.rep/
+*.gpr
+*.rep/
+venv/
+.venv/
