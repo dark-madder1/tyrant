@@ -8,3 +8,4 @@ tyrant.rep/
 *.rep/
 venv/
 .venv/
+tyrant.generated-broken/
