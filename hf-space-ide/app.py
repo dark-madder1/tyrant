@@ -13,7 +13,10 @@ import gradio as gr
 from threading import Thread
 from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
 
-from agents import AGENTS, WELCOME_TEMPLATES, CATEGORY_LABELS, get_agent, get_agent_choices
+from agents import (
+    AGENTS, PROMPT_LIBRARY, CATEGORY_LABELS,
+    get_agent, get_agent_choices, get_todays_prompts, get_shuffled_prompts,
+)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -378,6 +381,70 @@ def agent_status_html(subtasks):
 
 
 # ---------------------------------------------------------------------------
+# Prompt board renderers
+# ---------------------------------------------------------------------------
+def render_prompt_board(prompts):
+    """Render the rotating prompt board as styled HTML cards."""
+    cards = []
+    for p in prompts:
+        cat = CATEGORY_LABELS.get(p["cat"], CATEGORY_LABELS["general"])
+        cards.append(
+            f"<div class='board-card' data-id='{p['id']}' "
+            f"onclick=\"document.querySelector('#prompt-select textarea')"
+            f".value='{p['id']}'; "
+            f"document.querySelector('#prompt-select textarea')"
+            f".dispatchEvent(new Event('input', {{bubbles:true}}))\">"
+            f"<div class='board-card-header'>"
+            f"<span class='board-cat-badge' style='background:{cat['color']}20;"
+            f"color:{cat['color']};border:1px solid {cat['color']}40'>"
+            f"{cat['icon']} {cat['label']}</span>"
+            f"</div>"
+            f"<div class='board-card-title'>{p['name']}</div>"
+            f"<div class='board-card-desc'>{p['desc']}</div>"
+            f"<div class='board-card-agent'>"
+            f"{get_agent(p['agent'])['icon']} {get_agent(p['agent'])['name']}"
+            f"</div>"
+            f"</div>"
+        )
+    row1 = "".join(cards[:4])
+    row2 = "".join(cards[4:8])
+    return (
+        f"<div class='board-grid'>{row1}</div>"
+        f"<div class='board-grid'>{row2}</div>"
+    )
+
+
+def render_full_library():
+    """Render the complete prompt library grouped by category."""
+    html = ""
+    for cat_key, cat_info in CATEGORY_LABELS.items():
+        prompts = [p for p in PROMPT_LIBRARY if p["cat"] == cat_key]
+        if not prompts:
+            continue
+        html += (
+            f"<div class='lib-section'>"
+            f"<h4 style='color:{cat_info['color']}'>"
+            f"{cat_info['icon']} {cat_info['label']} ({len(prompts)} prompts)</h4>"
+            f"<div class='lib-grid'>"
+        )
+        for p in prompts:
+            agent = get_agent(p["agent"])
+            html += (
+                f"<div class='lib-card' data-id='{p['id']}' "
+                f"onclick=\"document.querySelector('#prompt-select textarea')"
+                f".value='{p['id']}'; "
+                f"document.querySelector('#prompt-select textarea')"
+                f".dispatchEvent(new Event('input', {{bubbles:true}}))\">"
+                f"<div class='lib-card-name'>{p['name']}</div>"
+                f"<div class='lib-card-desc'>{p['desc']}</div>"
+                f"<div class='lib-card-agent'>{agent['icon']} {agent['name']}</div>"
+                f"</div>"
+            )
+        html += "</div></div>"
+    return html
+
+
+# ---------------------------------------------------------------------------
 # CSS — VS Code / Cursor dark theme
 # ---------------------------------------------------------------------------
 CSS = """
@@ -559,6 +626,88 @@ footer { display: none !important; }
 }
 .statusbar-section { display: flex; gap: 16px; align-items: center; }
 
+/* ── Prompt board ── */
+.board-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+}
+@media (max-width: 768px) {
+    .board-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.board-card {
+    background: #2d2d2d;
+    border: 1px solid #3c3c3c;
+    border-radius: 10px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 130px;
+}
+.board-card:hover {
+    background: #37373d;
+    border-color: #007acc;
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0,122,204,0.15);
+}
+.board-card-header { display: flex; align-items: center; }
+.board-cat-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.board-card-title {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+}
+.board-card-desc {
+    color: #999;
+    font-size: 12px;
+    line-height: 1.4;
+    flex: 1;
+}
+.board-card-agent {
+    color: #666;
+    font-size: 11px;
+    margin-top: auto;
+    padding-top: 6px;
+    border-top: 1px solid #333;
+}
+
+/* ── Full library ── */
+.lib-section { margin-bottom: 20px; }
+.lib-section h4 { margin: 12px 0 8px; font-size: 14px; }
+.lib-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+@media (max-width: 768px) {
+    .lib-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.lib-card {
+    background: #252526;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.lib-card:hover {
+    background: #2d2d2d;
+    border-color: #007acc;
+}
+.lib-card-name { color: #ddd; font-size: 13px; font-weight: 600; }
+.lib-card-desc { color: #888; font-size: 11px; margin: 4px 0; }
+.lib-card-agent { color: #666; font-size: 11px; }
+
 /* ── Misc overrides ── */
 .dark .block { border: none !important; }
 .dark label { color: #ccc !important; }
@@ -613,52 +762,58 @@ with gr.Blocks(css=CSS, theme=theme, title="CyberForge") as demo:
     with gr.Tabs() as main_tabs:
 
         # ============================================================
-        # TAB 1: WELCOME / QUICK START
+        # TAB 1: WELCOME / ROTATING PROMPT BOARD
         # ============================================================
         with gr.Tab("⌂ Home", id="home"):
             gr.Markdown(
                 "## Welcome to CyberForge\n"
                 "The **full-spectrum cybersecurity coding suite**. "
-                "Offensive, defensive, and threat intelligence agents — "
-                "all in one IDE.\n\n"
-                "**How it works:** Pick an AI agent (red team, blue team, "
-                "threat intel, or general dev), describe what you want, "
-                "and it writes the code directly into your editor. "
-                "For big projects, the **Orchestrator** splits work "
-                "across multiple agents automatically.\n\n"
-                "**New to this?** Just click a template below to get started instantly."
+                "Offensive, defensive, and threat intelligence agents "
+                "in one IDE.\n\n"
+                "**How it works:** Click any card below, and the right "
+                "agent starts coding it for you. For big jobs, the "
+                "**Orchestrator** splits work across agents automatically."
             )
-            gr.Markdown("### Quick Start Templates")
-            gr.Markdown(
-                "\U0001f534 = Offensive &nbsp;&nbsp; "
-                "\U0001f6e1️ = Defensive &nbsp;&nbsp; "
-                "\U0001f50e = Threat Intel &nbsp;&nbsp; "
-                "\U0001f310 = General &nbsp;&nbsp; "
-                "\U0001f680 = Multi-Agent"
-            )
-            template_btns = []
-            with gr.Row():
-                for i, t in enumerate(WELCOME_TEMPLATES[:4]):
-                    with gr.Column(scale=1, min_width=140):
-                        btn = gr.Button(
-                            f"{t['icon']}\n{t['name']}\n{t['description']}",
-                            elem_classes=["template-card"],
-                            size="lg",
-                        )
-                        template_btns.append((btn, i))
-            with gr.Row():
-                for i, t in enumerate(WELCOME_TEMPLATES[4:], start=4):
-                    with gr.Column(scale=1, min_width=140):
-                        btn = gr.Button(
-                            f"{t['icon']}\n{t['name']}\n{t['description']}",
-                            elem_classes=["template-card"],
-                            size="lg",
-                        )
-                        template_btns.append((btn, i))
 
+            # -- Rotating prompt board (dynamic HTML) --
             gr.Markdown(
-                "### Your Agents\n"
-                "Each agent is a specialist. Pick the right one for the job:"
+                "### Today's Prompt Board &nbsp; "
+                "*Fresh picks daily from 50+ prompts across all categories*"
+            )
+            gr.Markdown(
+                "\U0001f534 Offensive &nbsp;&nbsp; "
+                "\U0001f6e1️ Defensive &nbsp;&nbsp; "
+                "\U0001f50e Threat Intel &nbsp;&nbsp; "
+                "\U0001f7e2 General &nbsp;&nbsp; "
+                "\U0001f680 Multi-Agent"
+            )
+
+            board_state = gr.State(get_todays_prompts(8))
+            shuffle_counter = gr.State(0)
+
+            prompt_board = gr.HTML(value=render_prompt_board(get_todays_prompts(8)))
+            selected_prompt_id = gr.Textbox(visible=False, elem_id="prompt-select")
+
+            with gr.Row():
+                shuffle_btn = gr.Button(
+                    "\U0001f500 Shuffle — Show Me Different Prompts",
+                    elem_classes=["action-btn"],
+                    size="sm",
+                )
+                all_prompts_btn = gr.Button(
+                    f"\U0001f4da Browse All {len(PROMPT_LIBRARY)} Prompts",
+                    variant="secondary",
+                    size="sm",
+                )
+
+            # -- Full library accordion (hidden by default) --
+            with gr.Accordion("Full Prompt Library", open=False) as lib_accordion:
+                full_lib_html = gr.HTML(value=render_full_library())
+
+            # -- Agent roster --
+            gr.Markdown(
+                "### Your Agents &nbsp; "
+                "*8 specialists — pick the right one for the job*"
             )
             with gr.Row():
                 for key in ["red_team", "blue_team", "threat_intel", "builder"]:
@@ -928,19 +1083,33 @@ with gr.Blocks(css=CSS, theme=theme, title="CyberForge") as demo:
 
     fs_state.change(_sync_dropdown, inputs=[fs_state], outputs=[file_selector])
 
-    # -- Templates --
-    for btn, idx in template_btns:
-        def _make_loader(i):
-            def _load(fs):
-                t = WELCOME_TEMPLATES[i]
-                return t["prompt"], t["agent"], gr.update(selected="editor")
-            return _load
+    # -- Prompt board: shuffle --
+    def _do_shuffle(counter):
+        counter += 1
+        prompts = get_shuffled_prompts(seed_extra=counter, count=8)
+        return render_prompt_board(prompts), prompts, counter
 
-        btn.click(
-            _make_loader(idx),
-            inputs=[fs_state],
-            outputs=[chat_input, agent_select, main_tabs],
-        )
+    shuffle_btn.click(
+        _do_shuffle,
+        inputs=[shuffle_counter],
+        outputs=[prompt_board, board_state, shuffle_counter],
+    )
+
+    # -- Prompt board: card click -> load into editor chat --
+    def _load_prompt(prompt_id, board):
+        for p in board:
+            if p["id"] == prompt_id:
+                return p["prompt"], p["agent"], gr.update(selected="editor")
+        for p in PROMPT_LIBRARY:
+            if p["id"] == prompt_id:
+                return p["prompt"], p["agent"], gr.update(selected="editor")
+        return "", "builder", gr.update()
+
+    selected_prompt_id.change(
+        _load_prompt,
+        inputs=[selected_prompt_id, board_state],
+        outputs=[chat_input, agent_select, main_tabs],
+    )
 
     # -- Orchestrator --
     run_btn.click(
