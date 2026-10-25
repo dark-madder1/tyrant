@@ -1,6 +1,7 @@
 """
-RedTeam Code Studio — AI-powered multi-agent coding IDE.
-VS Code / Cursor-inspired interface running on HuggingFace ZeroGPU.
+CyberForge — AI-powered cybersecurity coding suite.
+Red Team + Blue Team + Threat Intel agents in a VS Code-inspired IDE.
+Running on HuggingFace ZeroGPU.
 """
 
 import os
@@ -12,7 +13,7 @@ import gradio as gr
 from threading import Thread
 from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
 
-from agents import AGENTS, WELCOME_TEMPLATES, get_agent, get_agent_choices
+from agents import AGENTS, WELCOME_TEMPLATES, CATEGORY_LABELS, get_agent, get_agent_choices
 
 # ---------------------------------------------------------------------------
 # Config
@@ -589,7 +590,7 @@ theme = gr.themes.Base(
     button_primary_background_fill="#0e639c",
 )
 
-with gr.Blocks(css=CSS, theme=theme, title="RedTeam Code Studio") as demo:
+with gr.Blocks(css=CSS, theme=theme, title="CyberForge") as demo:
 
     # -- State --
     fs_state = gr.State(new_fs)
@@ -601,8 +602,8 @@ with gr.Blocks(css=CSS, theme=theme, title="RedTeam Code Studio") as demo:
     # ================================================================
     gr.HTML(
         "<div class='topbar'>"
-        "<span class='topbar-title'>\U0001f9e0 RedTeam Code Studio</span>"
-        "<span class='topbar-subtitle'>AI-Powered Multi-Agent IDE</span>"
+        "<span class='topbar-title'>⚒️ CyberForge</span>"
+        "<span class='topbar-subtitle'>AI Cybersecurity Coding Suite &mdash; Red Team &bull; Blue Team &bull; Threat Intel</span>"
         "</div>"
     )
 
@@ -616,18 +617,37 @@ with gr.Blocks(css=CSS, theme=theme, title="RedTeam Code Studio") as demo:
         # ============================================================
         with gr.Tab("⌂ Home", id="home"):
             gr.Markdown(
-                "## Welcome to RedTeam Code Studio\n"
-                "Pick a template to get started, or switch to the **Editor** "
-                "tab to start from scratch.\n\n"
-                "**How it works:** Choose an AI agent, describe what you want, "
-                "and the agent writes the code directly into your editor. "
-                "For big projects, use the **Orchestrator** to split work "
-                "across multiple agents automatically."
+                "## Welcome to CyberForge\n"
+                "The **full-spectrum cybersecurity coding suite**. "
+                "Offensive, defensive, and threat intelligence agents — "
+                "all in one IDE.\n\n"
+                "**How it works:** Pick an AI agent (red team, blue team, "
+                "threat intel, or general dev), describe what you want, "
+                "and it writes the code directly into your editor. "
+                "For big projects, the **Orchestrator** splits work "
+                "across multiple agents automatically.\n\n"
+                "**New to this?** Just click a template below to get started instantly."
             )
             gr.Markdown("### Quick Start Templates")
+            gr.Markdown(
+                "\U0001f534 = Offensive &nbsp;&nbsp; "
+                "\U0001f6e1️ = Defensive &nbsp;&nbsp; "
+                "\U0001f50e = Threat Intel &nbsp;&nbsp; "
+                "\U0001f310 = General &nbsp;&nbsp; "
+                "\U0001f680 = Multi-Agent"
+            )
+            template_btns = []
             with gr.Row():
-                template_btns = []
-                for i, t in enumerate(WELCOME_TEMPLATES):
+                for i, t in enumerate(WELCOME_TEMPLATES[:4]):
+                    with gr.Column(scale=1, min_width=140):
+                        btn = gr.Button(
+                            f"{t['icon']}\n{t['name']}\n{t['description']}",
+                            elem_classes=["template-card"],
+                            size="lg",
+                        )
+                        template_btns.append((btn, i))
+            with gr.Row():
+                for i, t in enumerate(WELCOME_TEMPLATES[4:], start=4):
                     with gr.Column(scale=1, min_width=140):
                         btn = gr.Button(
                             f"{t['icon']}\n{t['name']}\n{t['description']}",
@@ -641,8 +661,17 @@ with gr.Blocks(css=CSS, theme=theme, title="RedTeam Code Studio") as demo:
                 "Each agent is a specialist. Pick the right one for the job:"
             )
             with gr.Row():
-                for key, agent in AGENTS.items():
-                    with gr.Column(scale=1, min_width=140):
+                for key in ["red_team", "blue_team", "threat_intel", "builder"]:
+                    agent = AGENTS[key]
+                    with gr.Column(scale=1, min_width=160):
+                        gr.Markdown(
+                            f"**{agent['icon']} {agent['name']}**\n\n"
+                            f"{agent['description']}"
+                        )
+            with gr.Row():
+                for key in ["architect", "reviewer", "debugger", "orchestrator"]:
+                    agent = AGENTS[key]
+                    with gr.Column(scale=1, min_width=160):
                         gr.Markdown(
                             f"**{agent['icon']} {agent['name']}**\n\n"
                             f"{agent['description']}"
@@ -795,7 +824,7 @@ with gr.Blocks(css=CSS, theme=theme, title="RedTeam Code Studio") as demo:
     gr.HTML(
         "<div class='statusbar'>"
         "<div class='statusbar-section'>"
-        "<span>\U0001f534 RedTeam Code Studio</span>"
+        "<span>⚒️ CyberForge</span>"
         "<span>Model: frEEtom3/redteam-coder-4b</span>"
         "</div>"
         "<div class='statusbar-section'>"
