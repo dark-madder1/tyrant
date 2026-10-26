@@ -20,29 +20,21 @@ DEFAULT_SYSTEM_PROMPT = (
     "and educational purposes."
 )
 
-tokenizer = None
-model = None
+token = os.environ.get("HF_TOKEN")
 
+tokenizer = AutoTokenizer.from_pretrained(
+    MODEL_ID,
+    token=token,
+    trust_remote_code=True,
+)
 
-def load_model():
-    global tokenizer, model
-    if model is not None:
-        return
-
-    token = os.environ.get("HF_TOKEN")
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_ID,
-        token=token,
-        trust_remote_code=True,
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        token=token,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    model.eval()
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_ID,
+    token=token,
+    torch_dtype=torch.float16,
+    trust_remote_code=True,
+)
+model.eval()
 
 
 @spaces.GPU(duration=120)
@@ -55,7 +47,7 @@ def generate(
     top_p: float,
     repetition_penalty: float,
 ):
-    load_model()
+    model.to("cuda")
 
     messages = [{"role": "system", "content": system_prompt}]
     for turn in history:
@@ -64,7 +56,7 @@ def generate(
 
     input_ids = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, return_tensors="pt"
-    ).to(model.device)
+    ).to("cuda")
 
     streamer = TextIteratorStreamer(
         tokenizer, skip_prompt=True, skip_special_tokens=True
