@@ -92,11 +92,11 @@ def generate(
 
 
 EXAMPLES = [
-    "Write a Python port scanner that detects the top 100 common ports.",
-    "Explain how SQL injection works and show a safe demo with SQLite.",
-    "Create a reverse shell payload in Python for a penetration test.",
-    "Write a script to enumerate subdomains using DNS brute-forcing.",
-    "Explain buffer overflow exploitation with a simple C example.",
+    ["Write a Python port scanner that detects the top 100 common ports."],
+    ["Explain how SQL injection works and show a safe demo with SQLite."],
+    ["Create a reverse shell payload in Python for a penetration test."],
+    ["Write a script to enumerate subdomains using DNS brute-forcing."],
+    ["Explain buffer overflow exploitation with a simple C example."],
 ]
 
 css = """
